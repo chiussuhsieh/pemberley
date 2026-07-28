@@ -44,7 +44,15 @@ def split_text(text, chunk_size=800, overlap=100):
             bp = sp if sp > start + floor else end
         chunks.append(text[start:bp].strip())
         nxt = bp - overlap
-        start = nxt if nxt > start else bp   # enforce strictly forward progress
+        if nxt <= start:
+            nxt = bp                          # enforce forward progress
+        else:
+            # Align the overlap start to a word boundary so chunks don't begin
+            # mid-word (e.g. "ligations" instead of "obligations").
+            sp = text.find(" ", nxt)
+            if sp != -1 and sp < bp:
+                nxt = sp + 1
+        start = nxt
     return chunks
 
 # ---- Main ----

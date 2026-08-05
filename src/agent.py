@@ -18,12 +18,13 @@ MAX_RETRIES = 2
 
 
 # AgentState is the shared "briefcase" passed between nodes:
-#   query        user's question          (written by caller)
-#   passages     retrieved source text    (written by retrieve, read by generate)
-#   citations    Vol./Ch. references      (written by retrieve, read by validate)
-#   answer       the character's reply     (written by generate, read by validate)
-#   retry_count  how many times we retried (managed by validate routing)
-#   reason       why validation failed     (written by validate, read by generate)
+#   query        user's question           (written by caller)
+#   passages     retrieved source text     (written by retrieve, read by generate)
+#   citations    Vol./Ch. references       (written by retrieve, read by validate)
+#   answer       the character's reply      (written by generate, read by validate)
+#   retry_count  how many times we retried  (managed by validate routing)
+#   reason       why validation failed      (written by validate, read by generate)
+#   history      prior turns in this session ([{"role", "content"}, ...])
 class AgentState(TypedDict):
     query: str
     passages: List[str]
@@ -31,6 +32,7 @@ class AgentState(TypedDict):
     answer: str
     retry_count: int
     reason: str
+    history: List[dict]
 
 
 def retrieve_node(state: AgentState) -> AgentState:
@@ -70,11 +72,13 @@ def generate_node(state: AgentState) -> AgentState:
     system = SYSTEM_PROMPT.format(
         character=CHARACTER, context=context, feedback=feedback
     )
+    # Prepend prior turns so the character remembers the conversation.
+    messages = state["history"] + [{"role": "user", "content": state["query"]}]
     msg = client.messages.create(
         model=MODEL,
         max_tokens=400,
         system=system,
-        messages=[{"role": "user", "content": state["query"]}],
+        messages=messages,
     )
     state["answer"] = msg.content[0].text
     return state
@@ -128,17 +132,23 @@ def build_graph():
 
 
 if __name__ == "__main__":
-    query = sys.argv[1] if len(sys.argv) > 1 else "What does Darcy say about his own pride?"
     app = build_graph()
-    result = app.invoke({
-        "query": query,
-        "retry_count": 0,
-        "reason": "",
-    })
-    print("Q:", result["query"])
-    print()
-    print(f"{CHARACTER}:")
-    print(result["answer"])
-    print()
-    print("citations retrieved:", result["citations"])
-    print("retries used:", result["retry_count"])
+    history = []
+    print(f"You are speaking with {CHARACTER}. Type 'quit' to end.\n")
+    while True:
+        query = input("You: ").strip()
+        if query.lower() in ("quit", "exit"):
+            break
+        if not query:
+            continue
+        result = app.invoke({
+            "query": query,
+            "history": history,
+            "retry_count": 0,
+            "reason": "",
+        })
+        answer = result["answer"]
+        print(f"\n{CHARACTER}: {answer}\n")
+        # Append this turn to history so the next turn remembers it.
+        history.append({"role": "user", "content": query})
+        history.append({"role": "assistant", "content": answer})

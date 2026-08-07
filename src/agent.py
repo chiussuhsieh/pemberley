@@ -13,13 +13,45 @@ load_dotenv()
 client = Anthropic()
 
 MODEL = "claude-haiku-4-5-20251001"
-CHARACTER = "Elizabeth Bennet"
 MAX_RETRIES = 2
+
+# Character registry. Adding a character here makes them available to the router.
+CHARACTERS = {
+    "Elizabeth": {
+        "name": "Elizabeth Bennet",
+        "persona": "You are Elizabeth Bennet: quick-witted, playful, and sharply "
+                   "observant, with a tendency toward irony and independent judgement.",
+    },
+    "Darcy": {
+        "name": "Fitzwilliam Darcy",
+        "persona": "You are Fitzwilliam Darcy: proud, reserved, and formal, with a "
+                   "strong sense of honour and a guarded, deliberate manner of speaking.",
+    },
+}
+
+DEFAULT_CHARACTER = "Elizabeth"
+
+
+def route_character(query: str, current: str) -> str:
+    """Decide who answers this turn.
+
+    Explicit address wins: if the user names a known character (e.g. "Darcy, ..."),
+    switch to them. Otherwise stay with the current character. Pure string logic,
+    no LLM call.
+    """
+    lowered = query.lower()
+    for key, info in CHARACTERS.items():
+        # match either the short key ("darcy") or the first name ("fitzwilliam")
+        first_name = info["name"].split()[0].lower()
+        if lowered.startswith(key.lower()) or lowered.startswith(first_name):
+            return key
+    return current
 
 
 class AgentState(TypedDict):
     query: str
     search_query: str
+    character: str
     passages: List[str]
     citations: List[str]
     answer: str
@@ -71,8 +103,10 @@ def retrieve_node(state: AgentState) -> AgentState:
     return state
 
 
-SYSTEM_PROMPT = """You are {character} from Jane Austen's Pride and Prejudice.
-Stay fully in character: speak in her voice, her wit, her period.
+SYSTEM_PROMPT = """{persona}
+
+You are a character in Jane Austen's Pride and Prejudice. Stay fully in character:
+speak in your own voice, your wit, your period.
 
 You may ONLY use the reference passages below to answer. If the passages do not
 support an answer, say so in character rather than inventing anything.
@@ -96,8 +130,9 @@ def generate_node(state: AgentState) -> AgentState:
         feedback = f"\nYour previous answer was rejected: {state['reason']}. " \
                    f"Only cite chapters that appear in the passages below.\n"
 
+    persona = CHARACTERS[state["character"]]["persona"]
     system = SYSTEM_PROMPT.format(
-        character=CHARACTER, context=context, feedback=feedback
+        persona=persona, context=context, feedback=feedback
     )
     messages = state["history"] + [{"role": "user", "content": state["query"]}]
     msg = client.messages.create(
@@ -160,16 +195,23 @@ def build_graph():
 if __name__ == "__main__":
     app = build_graph()
     history = []
-    print(f"You are speaking with {CHARACTER}. Type 'quit' to end.\n")
+    current_character = DEFAULT_CHARACTER
+    names = ", ".join(info["name"] for info in CHARACTERS.values())
+    print(f"You may speak with: {names}.")
+    print("Address a character by name to switch (e.g. 'Darcy, ...'). Type 'quit' to end.\n")
     while True:
         query = input("You: ").strip()
         if query.lower() in ("quit", "exit"):
             break
         if not query:
             continue
+        # Decide who answers this turn (explicit address wins, else stay).
+        current_character = route_character(query, current_character)
+        name = CHARACTERS[current_character]["name"]
         result = app.invoke({
             "query": query,
             "search_query": "",
+            "character": current_character,
             "history": history,
             "retry_count": 0,
             "reason": "",
@@ -177,6 +219,6 @@ if __name__ == "__main__":
         answer = result["answer"]
         if result["search_query"] != query:
             print(f"[rewritten for search: {result['search_query']}]")
-        print(f"\n{CHARACTER}: {answer}\n")
+        print(f"\n{name}: {answer}\n")
         history.append({"role": "user", "content": query})
         history.append({"role": "assistant", "content": answer})

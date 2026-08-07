@@ -17,16 +17,9 @@ CHARACTER = "Elizabeth Bennet"
 MAX_RETRIES = 2
 
 
-# AgentState is the shared "briefcase" passed between nodes:
-#   query        user's question           (written by caller)
-#   passages     retrieved source text     (written by retrieve, read by generate)
-#   citations    Vol./Ch. references       (written by retrieve, read by validate)
-#   answer       the character's reply      (written by generate, read by validate)
-#   retry_count  how many times we retried  (managed by validate routing)
-#   reason       why validation failed      (written by validate, read by generate)
-#   history      prior turns in this session ([{"role", "content"}, ...])
 class AgentState(TypedDict):
     query: str
+    search_query: str
     passages: List[str]
     citations: List[str]
     answer: str
@@ -35,9 +28,44 @@ class AgentState(TypedDict):
     history: List[dict]
 
 
+REWRITE_PROMPT = """Given the conversation history and a follow-up question,
+rewrite the follow-up into a standalone question that can be understood without
+the history. Resolve any pronouns or references (e.g. "her", "that", "his") to
+the actual names or subjects from the history.
+
+Only output the rewritten question, nothing else. If the question is already
+standalone, output it unchanged.
+
+Conversation history:
+{history}
+
+Follow-up question: {query}
+
+Standalone question:"""
+
+
+def rewrite_node(state: AgentState) -> AgentState:
+    """Rewrite a context-dependent query into a standalone one for retrieval."""
+    if not state["history"]:
+        state["search_query"] = state["query"]
+        return state
+
+    history_text = "\n".join(
+        f"{m['role']}: {m['content']}" for m in state["history"]
+    )
+    prompt = REWRITE_PROMPT.format(history=history_text, query=state["query"])
+    msg = client.messages.create(
+        model=MODEL,
+        max_tokens=100,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    state["search_query"] = msg.content[0].text.strip()
+    return state
+
+
 def retrieve_node(state: AgentState) -> AgentState:
     """Fetch relevant passages from the vector store, with their citations."""
-    hits = retrieve(state["query"], k=5)
+    hits = retrieve(state["search_query"], k=5)
     state["passages"] = [h["text"] for h in hits]
     state["citations"] = [h["citation"] for h in hits]
     return state
@@ -63,7 +91,6 @@ def generate_node(state: AgentState) -> AgentState:
         f"[{cite}] {text}"
         for cite, text in zip(state["citations"], state["passages"])
     )
-    # On a retry, tell the model why the previous attempt was rejected.
     feedback = ""
     if state.get("reason"):
         feedback = f"\nYour previous answer was rejected: {state['reason']}. " \
@@ -72,7 +99,6 @@ def generate_node(state: AgentState) -> AgentState:
     system = SYSTEM_PROMPT.format(
         character=CHARACTER, context=context, feedback=feedback
     )
-    # Prepend prior turns so the character remembers the conversation.
     messages = state["history"] + [{"role": "user", "content": state["query"]}]
     msg = client.messages.create(
         model=MODEL,
@@ -103,25 +129,25 @@ def revise_node(state: AgentState) -> AgentState:
 def route_after_validate(state: AgentState) -> str:
     """Decide where to go after validation."""
     if not state["reason"]:
-        return "pass"                      # validation succeeded
+        return "pass"
     if state["retry_count"] < MAX_RETRIES:
         state["retry_count"] += 1
-        return "retry"                     # try generating again
-    return "give_up"                       # exhausted retries
+        return "retry"
+    return "give_up"
 
 
 def build_graph():
     graph = StateGraph(AgentState)
+    graph.add_node("rewrite", rewrite_node)
     graph.add_node("retrieve", retrieve_node)
     graph.add_node("generate", generate_node)
     graph.add_node("validate", validate_node)
     graph.add_node("revise", revise_node)
 
-    graph.set_entry_point("retrieve")
+    graph.set_entry_point("rewrite")
+    graph.add_edge("rewrite", "retrieve")
     graph.add_edge("retrieve", "generate")
     graph.add_edge("generate", "validate")
-
-    # Conditional branch after validate.
     graph.add_conditional_edges(
         "validate",
         route_after_validate,
@@ -143,12 +169,14 @@ if __name__ == "__main__":
             continue
         result = app.invoke({
             "query": query,
+            "search_query": "",
             "history": history,
             "retry_count": 0,
             "reason": "",
         })
         answer = result["answer"]
+        if result["search_query"] != query:
+            print(f"[rewritten for search: {result['search_query']}]")
         print(f"\n{CHARACTER}: {answer}\n")
-        # Append this turn to history so the next turn remembers it.
         history.append({"role": "user", "content": query})
         history.append({"role": "assistant", "content": answer})

@@ -3,3 +3,4 @@
 __pycache__/
 data/raw/
 data/clean/
+src/chroma_db/

@@ -1,18 +1,18 @@
 import json
+import os
 import uuid
 
 import redis
 
-# One shared connection. decode_responses=True so we get str back, not bytes.
-_r = redis.Redis(host="localhost", port=6379, decode_responses=True)
+# Connection URL comes from the environment in deployment (Render sets REDIS_URL);
+# falls back to local Docker Redis for development.
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
+_r = redis.Redis.from_url(REDIS_URL, decode_responses=True)
 
-# Conversations expire after this many seconds of inactivity, so Redis doesn't
-# grow without bound. Any read/write refreshes the clock.
 TTL_SECONDS = 7 * 24 * 60 * 60   # 7 days
 
 
 def new_session() -> str:
-    """Create a fresh session id for a new conversation."""
     return uuid.uuid4().hex
 
 
@@ -21,7 +21,6 @@ def _key(session_id: str) -> str:
 
 
 def load(session_id: str) -> dict:
-    """Return {history, character} for a session, or defaults if unknown."""
     raw = _r.get(_key(session_id))
     if raw is None:
         return {"history": [], "character": "Elizabeth"}
@@ -29,6 +28,5 @@ def load(session_id: str) -> dict:
 
 
 def save(session_id: str, history: list, character: str) -> None:
-    """Persist a session's state and refresh its expiry."""
     data = json.dumps({"history": history, "character": character})
     _r.set(_key(session_id), data, ex=TTL_SECONDS)

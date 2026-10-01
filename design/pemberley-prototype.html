@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pemberley</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400;1,500&family=EB+Garamond:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --parchment: #f4ecd8;
+    --parchment-deep: #ebe0c4;
+    --ink: #2b2620;
+    --ink-soft: #4a4238;
+    --green: #2f4032;
+    --green-deep: #1f2b21;
+    --gold: #9a7b3f;
+    --gold-bright: #b8974e;
+    --rule: #cbbb93;
+    --eliza: #6b4a2f;
+    --darcy: #2f4032;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background:
+      radial-gradient(ellipse at top, rgba(155,123,63,0.06), transparent 60%),
+      var(--parchment);
+    color: var(--ink);
+    font-family: 'EB Garamond', Georgia, serif;
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    padding: 2rem 1rem;
+    line-height: 1.6;
+  }
+
+  .book {
+    width: 100%;
+    max-width: 720px;
+    background: var(--parchment);
+    border: 1px solid var(--rule);
+    box-shadow: 0 2px 0 var(--parchment-deep), 0 20px 50px rgba(43,38,32,0.18);
+    display: flex;
+    flex-direction: column;
+    min-height: calc(100vh - 4rem);
+  }
+
+  /* Header — a title page, not an app bar */
+  header {
+    text-align: center;
+    padding: 2.4rem 2rem 1.6rem;
+    border-bottom: 1px solid var(--rule);
+    position: relative;
+  }
+  header::after {
+    content: "";
+    position: absolute;
+    left: 50%; bottom: 1rem;
+    transform: translateX(-50%);
+    width: 60px; height: 1px;
+    background: var(--gold);
+  }
+  .titlemark {
+    font-family: 'Cormorant Garamond', serif;
+    letter-spacing: 0.35em;
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    color: var(--gold);
+    margin-bottom: 0.6rem;
+  }
+  h1 {
+    font-family: 'Cormorant Garamond', serif;
+    font-weight: 600;
+    font-size: 3rem;
+    letter-spacing: 0.02em;
+    color: var(--ink);
+    line-height: 1;
+  }
+  .subtitle {
+    font-style: italic;
+    font-size: 1rem;
+    color: var(--ink-soft);
+    margin-top: 0.7rem;
+  }
+
+  /* Character selector — two calling cards */
+  .cast {
+    display: flex;
+    gap: 0;
+    border-bottom: 1px solid var(--rule);
+  }
+  .card {
+    flex: 1;
+    text-align: center;
+    padding: 0.9rem 1rem;
+    cursor: pointer;
+    background: transparent;
+    border: none;
+    border-right: 1px solid var(--rule);
+    font-family: 'EB Garamond', serif;
+    transition: background 0.25s;
+  }
+  .card:last-child { border-right: none; }
+  .card:hover { background: var(--parchment-deep); }
+  .card .role {
+    font-family: 'Cormorant Garamond', serif;
+    font-size: 0.62rem;
+    letter-spacing: 0.28em;
+    text-transform: uppercase;
+    color: var(--gold);
+    display: block;
+    margin-bottom: 0.15rem;
+  }
+  .card .who {
+    font-size: 1.15rem;
+    color: var(--ink);
+  }
+  .card.active {
+    background: var(--green);
+  }
+  .card.active .who { color: var(--parchment); }
+  .card.active .role { color: var(--gold-bright); }
+
+  /* Conversation — a correspondence */
+  .letters {
+    flex: 1;
+    padding: 1.8rem 2.2rem;
+    overflow-y: auto;
+  }
+  .turn { margin-bottom: 1.8rem; }
+
+  .speaker {
+    font-family: 'Cormorant Garamond', serif;
+    font-size: 0.68rem;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    margin-bottom: 0.35rem;
+  }
+  .turn.you .speaker { color: var(--gold); }
+  .turn.eliza .speaker { color: var(--eliza); }
+  .turn.darcy .speaker { color: var(--darcy); }
+
+  .turn.you .body {
+    font-style: italic;
+    color: var(--ink-soft);
+    padding-left: 1rem;
+    border-left: 2px solid var(--rule);
+  }
+  .turn.reply .body {
+    font-size: 1.08rem;
+    color: var(--ink);
+  }
+  .turn.eliza .body { border-left: 2px solid var(--eliza); padding-left: 1rem; }
+  .turn.darcy .body { border-left: 2px solid var(--darcy); padding-left: 1rem; }
+
+  /* Citation — a marginal note / bookmark */
+  .cite {
+    display: inline-block;
+    font-family: 'Cormorant Garamond', serif;
+    font-size: 0.78rem;
+    letter-spacing: 0.04em;
+    color: var(--gold);
+    background: var(--parchment-deep);
+    border: 1px solid var(--rule);
+    padding: 0.05rem 0.5rem;
+    border-radius: 2px;
+    vertical-align: baseline;
+    white-space: nowrap;
+  }
+
+  /* Input — writing desk */
+  .desk {
+    border-top: 1px solid var(--rule);
+    padding: 1.1rem 2.2rem 1.6rem;
+    display: flex;
+    gap: 0.8rem;
+    align-items: flex-end;
+    background: var(--parchment-deep);
+  }
+  .desk textarea {
+    flex: 1;
+    resize: none;
+    background: var(--parchment);
+    border: 1px solid var(--rule);
+    border-radius: 2px;
+    padding: 0.7rem 0.9rem;
+    font-family: 'EB Garamond', serif;
+    font-size: 1rem;
+    color: var(--ink);
+    line-height: 1.5;
+    height: 46px;
+  }
+  .desk textarea:focus {
+    outline: none;
+    border-color: var(--gold);
+  }
+  .desk textarea::placeholder { color: #9b8f74; font-style: italic; }
+  .send {
+    font-family: 'Cormorant Garamond', serif;
+    font-size: 0.72rem;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    background: var(--green);
+    color: var(--parchment);
+    border: none;
+    padding: 0.85rem 1.3rem;
+    border-radius: 2px;
+    cursor: pointer;
+    transition: background 0.2s;
+    white-space: nowrap;
+  }
+  .send:hover { background: var(--green-deep); }
+
+  .note {
+    text-align: center;
+    font-style: italic;
+    font-size: 0.8rem;
+    color: #9b8f74;
+    padding: 0.7rem;
+  }
+</style>
+</head>
+<body>
+  <div class="book">
+    <header>
+      <div class="titlemark">A Conversation at</div>
+      <h1>Pemberley</h1>
+      <div class="subtitle">Speak with the characters of <em>Pride and Prejudice</em></div>
+    </header>
+
+    <div class="cast">
+      <button class="card active">
+        <span class="role">Miss</span>
+        <span class="who">Elizabeth Bennet</span>
+      </button>
+      <button class="card">
+        <span class="role">Mr</span>
+        <span class="who">Fitzwilliam Darcy</span>
+      </button>
+    </div>
+
+    <div class="letters">
+      <div class="turn you">
+        <div class="speaker">You enquire</div>
+        <div class="body">What did you first think of Mr. Darcy?</div>
+      </div>
+
+      <div class="turn reply eliza">
+        <div class="speaker">Elizabeth Bennet replies</div>
+        <div class="body">
+          I confess I took a most decided dislike to him upon our first acquaintance. I thought him
+          proud, disagreeable, and above being pleased. He danced but little, and slighted me at the
+          assembly with a coldness I did not soon forget. <span class="cite">Vol. I, Ch. 3</span>
+          It was such a spur to one's wit, to have a dislike of that kind. <span class="cite">Vol. II, Ch. 40</span>
+        </div>
+      </div>
+
+      <div class="turn you">
+        <div class="speaker">You address Mr. Darcy</div>
+        <div class="body">Darcy, and what did you make of her?</div>
+      </div>
+
+      <div class="turn reply darcy">
+        <div class="speaker">Fitzwilliam Darcy replies</div>
+        <div class="body">
+          I own that at first I looked on her only with a critical eye, and pronounced her tolerable,
+          but not handsome enough to tempt me. <span class="cite">Vol. I, Ch. 3</span>
+          Yet I had not long been in her company before I found myself caught by the fine expression
+          of her dark eyes, and the easy playfulness of her manner. My objections I need not name.
+          <span class="cite">Vol. I, Ch. 6</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="desk">
+      <textarea placeholder="Write to Mr. Darcy… (address a character by name to change speaker)"></textarea>
+      <button class="send">Send</button>
+    </div>
+
+    <div class="note">A visual prototype. Replies shown are illustrative.</div>
+  </div>
+</body>
+</html>

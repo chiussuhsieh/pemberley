@@ -2,5 +2,4 @@
 .env
 __pycache__/
 data/raw/
-chroma_db/
 data/clean/

@@ -1,169 +1,99 @@
 # Pemberley
 
-A voice-enabled RAG agent that lets readers converse with characters from Jane
-Austen's *Pride and Prejudice*. Every response is grounded in the source text
-and carries a citation to a specific volume and chapter, so the character can
-never invent events that aren't in the novel.
+Conversations with Jane Austen's characters, grounded in the original novel. Ask Elizabeth what she first thought of Mr. Darcy, or ask Darcy himself about Wickham. Each reply is spoken in character and cites the exact volume and chapter it draws from, so a character can't claim something the book never says.
 
-The project is a working demonstration of problems that voice-agent systems face
-in production: **hallucination control**, **persona consistency**, **grounded
-generation with verifiable citations**, and **multi-agent orchestration**.
+**Live demo:** https://pemberley-ui.onrender.com
+*(First load may take ~50s while the free server wakes up.)*
 
-## Why this project
+![Elizabeth answering a question with a cited passage](docs/demo-elizabeth.png)
+![Darcy answering a question with a cited passage](docs/demo-darcy.png)
 
-Character role-play with LLMs has two failure modes. The model **hallucinates**,
-inventing plot points the source never contains, and it suffers **persona
-drift**, saying things out of character or out of period. Pemberley addresses
-both by forcing every answer to be traceable to a specific passage: if the model
-can't ground a claim in retrieved text, it declines or rephrases rather than
-inventing.
+## What it solves
 
-This is the same class of problem that voice-agent companies solve every day,
-which is why the stack deliberately builds on their tooling (Deepgram for STT,
-ElevenLabs/Cartesia for TTS in later phases).
+Ask an LLM to play a character and two things usually go wrong: it **invents** events that aren't in the book, and it **slips out of character**. Pemberley handles both by never letting a character answer without grounding the reply in a real passage from the text, and by tagging every reply with the chapter it came from. If the book doesn't support an answer, the character says so instead of making one up.
 
-## Current status
+This is the same problem chatbot and voice-agent products deal with constantly: keeping an AI accurate, on-character, and able to show where its answers come from.
 
-This is an in-progress project built in weekly milestones.
+## How it works
 
-- [x] **Ingestion pipeline** — clean, chapter-aware chunking, embedding, retrieval
-- [x] **Citation grounding** — every retrieved chunk carries a Vol./Ch. citation
-- [x] **Persona layer** — LangGraph state machine with citation enforcement and retry
-- [x] **Multi-turn conversation** — in-session memory with query rewriting for retrieval
-- [x] **Multi-agent** — multiple characters (Elizabeth, Darcy) with a router
-- [ ] **Voice loop** — Deepgram STT + TTS with latency profiling
-- [ ] **Deployment** — public demo
+Every message runs through a short pipeline:
 
-## Architecture
+1. **Pick the character** — whoever you name answers; otherwise the current one continues.
+2. **Rewrite the question** — a follow-up like "and what about her?" is rewritten into a full, standalone question so search works.
+3. **Search the book** — find the most relevant passages, each tagged with its volume and chapter.
+4. **Write the reply** — the character answers using those passages and must cite them.
+5. **Check the citations** — if a citation is missing or points to a chapter that wasn't retrieved, the answer is rejected and regenerated; after two tries it falls back to an honest "I can't find that in the text."
 
-```
-pemberley/
-├── src/
-│   ├── clean.py         # Strip Gutenberg boilerplate, illustrations, front matter
-│   ├── chunk.py         # Chapter-aware chunking with continuity validation
-│   ├── config.py        # Single source of truth for embedding function + paths
-│   ├── index.py         # Embed chunks and write to Chroma
-│   ├── retrieve.py      # Query the vector store, return passages with citations
-│   ├── agent.py         # LangGraph conversation agent (rewrite → retrieve →
-│   │                    #   generate → validate → retry/revise) + character router
-│   ├── validate.py      # Citation validation (L1 format, L2 provenance)
-│   ├── test_validate.py # Tests for citation validation
-│   └── test_routing.py  # Tests for retry routing
-├── data/                # Raw + cleaned text, chunks (git-ignored, rebuildable)
-└── requirements.txt
-```
+It's built with LangGraph as a state machine, so the check-and-retry loop is a real part of the flow rather than a prompt instruction the model can ignore.
 
-Conversation flow (per turn):
+## Engineering decisions
 
-```
-user question
-  → router      (pick the character who answers; explicit address wins)
-  → rewrite     (resolve pronouns into a standalone query, for retrieval only)
-  → retrieve    (semantic search, return top-k passages + Vol./Ch. citations)
-  → generate    (in-character reply grounded in passages, original query kept)
-  → validate    (L1: has a citation? L2: are cited chapters actually retrieved?)
-       ├─ pass    → reply
-       ├─ retry   → back to generate with feedback (max 2)
-       └─ give up → honest in-character refusal
-```
+**Why cite chapters instead of page numbers?** A chapter points to the same place in any edition, so anyone can verify a quote. A page number only means something in one specific copy.
 
-## Design decisions
+**Why split the text by chapter first?** Every answer has to cite one chapter, so a passage can't straddle two. The book is divided into chapters before anything else, and each chunk keeps its chapter with it. This also meant stripping out everything that doesn't belong to a chapter (the Gutenberg license, illustration captions, the table of contents) before indexing.
 
-The citation guarantee constrains every upstream choice. A few that came out of
-building it:
+**Why rewrite the question before searching?** The character remembers the conversation, but the search only sees one question at a time. "And what about her manners?" means nothing on its own, so it's rewritten to "What did Darcy think of Elizabeth's manners?" for the search. The reply still answers your original wording, so the conversation stays natural. Trade-off: one extra model call per turn.
 
-**Chunks never cross chapter boundaries.** Because every answer must cite a
-chapter, a chunk that spans two chapters would produce a wrong citation. So
-chunking happens in two levels: split the book into chapters first, then split
-within each chapter. This also forced the cleaning step to remove all non-body
-content (license boilerplate, illustration blocks, the table of contents),
-since none of it belongs to a chapter and can't be assigned a citation.
+**Why check citations instead of just asking for them?** Asking the model to cite is only a request, and it can slip. A separate step verifies that every citation in an answer points to a passage that was actually retrieved. Only then does "the answer has citations" become "the citations point to real, retrieved chapters."
 
-**Metadata is semantic, not positional.** Chunks store volume and chapter, not a
-chunk index. A chunk index only means something inside this particular file; a
-reader can't use it to verify anything. "Vol. II, Ch. 11" points to the same
-passage in any edition, which is what makes the citation actually verifiable.
+## What it does and doesn't guarantee
 
-**Chapter segmentation is validated, not hard-coded.** This edition has three
-irregularities: a leftover illustrations list, a first chapter with no heading,
-and one chapter whose heading uses different capitalization. Rather than
-hard-coding fixes for specific chapters, the pipeline validates that the output
-is the complete run of chapters 1–61 and reports any gap, so future texts will
-surface their own irregularities instead of failing silently.
+Being precise about this is part of the point:
 
-**Citation enforcement is validated, not just requested.** The system prompt asks
-the model to cite, but a prompt is only a request. A validation node checks every
-answer: it must contain a citation (L1), and every cited chapter must be one that
-retrieval actually returned (L2). A hallucinated citation sends the turn back to
-generation with feedback, up to two retries, then falls back to an honest refusal.
-This turns "cited sources" into "verified sources".
+- **It verifies citation provenance.** Every chapter a character cites is confirmed to be one that retrieval actually returned. The model can't cite a chapter out of thin air.
+- **It does not verify factual grounding.** A citation pointing to a real, retrieved chapter does not prove the sentence it's attached to is fully supported by that chapter. The model could cite a genuine chapter while paraphrasing loosely. Catching that would need a further step (an LLM or rule-based check that each claim is entailed by its cited passage), which is a planned improvement, not a current guarantee.
 
-**Query rewriting serves retrieval, not generation.** In multi-turn conversation
-the model remembers context, but retrieval sees only the raw query, so a
-follow-up like "and what about her manners?" retrieves poorly. A rewrite step
-resolves references into a standalone query — but that rewritten query is used
-only for retrieval. Generation still uses the original phrasing, so the
-character's reply stays natural instead of sounding like a restated search query.
+In short: citations are real and traceable, but faithfulness of every claim to its source is not yet machine-verified.
 
-**The character router is conversation-level state, not graph state.** Which
-character answers is decided in the main loop and persists across turns (explicit
-address switches character; otherwise it stays), rather than inside the LangGraph
-state, because it is a property of the conversation rather than of a single turn.
+## Tech stack
 
-**ONNX embeddings, no PyTorch.** Uses Chroma's built-in ONNX all-MiniLM-L6-v2.
-Same model as the sentence-transformers version, but with no PyTorch dependency,
-which keeps the deployment image small and cold starts fast. Since the project
-only needs inference, not training, the full framework buys nothing.
+| Part | Choice |
+|---|---|
+| Language | Python 3.12 |
+| Orchestration | LangGraph (state machine with conditional retry) |
+| LLM | Anthropic Claude |
+| Search | Chroma vector store, ONNX all-MiniLM-L6-v2 embeddings |
+| API | FastAPI |
+| Sessions | Redis (a conversation survives a page reload) |
+| Hosting | Render (static frontend + web service + Redis) |
+| Source text | Project Gutenberg, *Pride and Prejudice* (public domain) |
 
-## Setup
+ONNX embeddings instead of the PyTorch build keep the deployment image small and cold starts fast; the project only needs inference, not training.
 
-Requires Python 3.11+ (developed on 3.12, Apple Silicon). Needs an Anthropic API
-key in a `.env` file (`ANTHROPIC_API_KEY=...`).
+## Getting started
+
+Requires Python 3.11+ and an Anthropic API key.
 
 ```bash
 git clone https://github.com/chiussuhsieh/pemberley.git
 cd pemberley
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
+echo "ANTHROPIC_API_KEY=your-key" > .env
 ```
 
-## Usage
-
-Build the index once:
+Build the search index once, then chat in the terminal:
 
 ```bash
-python src/clean.py      # produces data/clean/pnp.txt
-python src/chunk.py      # produces data/clean/chunks.jsonl (validates 61 chapters)
-python src/index.py      # builds the Chroma index
+python src/clean.py     # strip Gutenberg boilerplate from the raw text
+python src/chunk.py     # split by chapter into chunks.jsonl (validates 61 chapters)
+python src/index.py     # embed the chunks and build the Chroma index
+python src/agent.py     # start chatting
 ```
 
-Then talk to the characters:
+Address a character by name to switch who answers (e.g. `Darcy, what do you think of Wickham?`).
 
-```bash
-python src/agent.py
-```
-
-Address a character by name to switch who answers (e.g. `Darcy, what do you
-think of Wickham?`); otherwise the current character continues.
-
-Run the tests:
+## Testing
 
 ```bash
 python src/test_validate.py
 python src/test_routing.py
 ```
 
-## Tech stack
+These cover the agent's control flow, not the literary quality of replies:
 
-- **Language**: Python 3.12
-- **Orchestration**: LangGraph (state machine with conditional routing)
-- **LLM**: Anthropic API (Claude)
-- **Vector store**: Chroma (PersistentClient)
-- **Embeddings**: ONNX all-MiniLM-L6-v2
-- **Source text**: Project Gutenberg (*Pride and Prejudice*, public domain)
-
-Planned: Deepgram (STT), ElevenLabs/Cartesia (TTS), FastAPI (API layer),
-Redis (cross-session persistence).
+- **Citation validation** — the validator accepts answers whose citations were retrieved and rejects missing or hallucinated ones.
+- **Character routing** — the router switches character on explicit address and otherwise stays with the current one.
 
 ## License
 
